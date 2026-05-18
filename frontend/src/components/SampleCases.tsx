@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useCaseStore } from '../store/caseStore';
+import { apiUrl } from '@/lib/api';
 import type { SampleCase } from '../types';
 
 /** Color mapping for specialty badges. */
@@ -48,7 +49,7 @@ export function SampleCases() {
 
     async function fetchSamples() {
       try {
-        const response = await axios.get<SampleCase[]>('/api/cases/samples');
+        const response = await axios.get<SampleCase[]>(apiUrl('/api/cases/samples'));
         if (!cancelled) {
           const data = response.data;
           setSamples(Array.isArray(data) ? data : []);
