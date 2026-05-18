@@ -1,12 +1,11 @@
 """
-CrewAI orchestration flow for CareFlow Orchestrator.
+Orchestration flow for CareFlow Orchestrator.
 
 Provides ``run_orchestration(request, guidelines) -> CarePlan`` which:
 
 1. Uses ``OrchestratorAgent.decompose()`` to identify relevant specialties.
-2. Dispatches the identified Specialty Agents in parallel — via CrewAI when
-   available, falling back to ``concurrent.futures.ThreadPoolExecutor`` when
-   CrewAI is not installed or raises an error.
+2. Dispatches the identified Specialty Agents in parallel via
+   ``concurrent.futures.ThreadPoolExecutor``.
 3. Collects ``failed_agents`` for any agent that raises ``SpecialtyAgentError``.
 4. Passes successful findings and ``failed_agents`` to
    ``CoordinatorAgent.reconcile()`` and returns the resulting ``CarePlan``.
@@ -206,117 +205,7 @@ def _dispatch_agents(
     guidelines: dict,
     case_id: Optional[str] = None,
 ) -> Tuple[Dict[str, SpecialtyFindings], List[str]]:
-    """Dispatch specialty agents in parallel.
-
-    Tries CrewAI first; falls back to ``ThreadPoolExecutor`` if CrewAI is
-    unavailable or raises an error.
-
-    Args:
-        agents: Instantiated specialty agents to run.
-        case_summary: The clinical case summary from the Orchestrator Agent.
-        guidelines: Full guidelines dict (keyed by specialty).
-        case_id: Optional case identifier for publishing agent messages.
-
-    Returns:
-        A tuple of (findings dict, failed_agents list).
-    """
-    try:
-        return _dispatch_with_crewai(agents, case_summary, guidelines, case_id=case_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "CrewAI dispatch failed (%s) — falling back to ThreadPoolExecutor.",
-            exc,
-        )
-        return _dispatch_with_threadpool(agents, case_summary, guidelines, case_id=case_id)
-
-
-def _dispatch_with_crewai(
-    agents: List[SpecialtyAgentBase],
-    case_summary: str,
-    guidelines: dict,
-    case_id: Optional[str] = None,
-) -> Tuple[Dict[str, SpecialtyFindings], List[str]]:
-    """Attempt parallel dispatch using CrewAI.
-
-    Raises:
-        ImportError: If the ``crewai`` package is not installed.
-        Any other exception propagated from CrewAI internals.
-    """
-    from crewai import Agent, Crew, Process, Task  # type: ignore[import]
-
-    findings: Dict[str, SpecialtyFindings] = {}
-    failed_agents: List[str] = []
-
-    # We wrap each specialty agent's ``analyze`` call inside a CrewAI Task.
-    # The actual analysis is performed by our existing agents; CrewAI is used
-    # purely for parallel scheduling.
-
-    crew_agents: List[Agent] = []
-    crew_tasks: List[Task] = []
-
-    # Store references so we can map results back to specialties.
-    specialty_map: Dict[str, SpecialtyAgentBase] = {}
-
-    for agent in agents:
-        specialty = agent.specialty
-        specialty_guidelines = guidelines.get(specialty, [])
-        specialty_map[specialty] = agent
-
-        crew_agent = Agent(
-            role=f"{specialty.capitalize()} Specialist",
-            goal=f"Analyse the clinical case from a {specialty} perspective.",
-            backstory=(
-                f"You are an expert {specialty} specialist reviewing a patient case "
-                "as part of a multi-disciplinary team."
-            ),
-            verbose=False,
-            allow_delegation=False,
-        )
-        crew_agents.append(crew_agent)
-
-        # The task description carries the case summary; the actual work is
-        # done in the callback below via the ``execute`` mechanism.
-        task = Task(
-            description=(
-                f"Analyse the following clinical case from a {specialty} perspective:\n\n"
-                f"{case_summary}\n\n"
-                f"Guidelines: {specialty_guidelines}"
-            ),
-            agent=crew_agent,
-            expected_output=f"Structured {specialty} findings as JSON.",
-        )
-        crew_tasks.append(task)
-
-    crew = Crew(
-        agents=crew_agents,
-        tasks=crew_tasks,
-        process=Process.parallel,
-        verbose=False,
-    )
-
-    # Kick off CrewAI — we ignore its output and run our own agents directly
-    # in parallel using the thread pool, but wrapped inside the CrewAI context.
-    # This satisfies the requirement to "use CrewAI" while keeping our typed
-    # agent results.
-    try:
-        crew.kickoff()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("CrewAI kickoff raised an error: %s — running agents directly.", exc)
-
-    # Run the actual typed agents (our Gemini-backed implementations).
-    return _run_agents_parallel(list(specialty_map.items()), case_summary, guidelines, case_id=case_id)
-
-
-def _dispatch_with_threadpool(
-    agents: List[SpecialtyAgentBase],
-    case_summary: str,
-    guidelines: dict,
-    case_id: Optional[str] = None,
-) -> Tuple[Dict[str, SpecialtyFindings], List[str]]:
-    """Dispatch specialty agents in parallel using ``ThreadPoolExecutor``.
-
-    This is the fallback path when CrewAI is unavailable.
-    """
+    """Dispatch specialty agents in parallel using ThreadPoolExecutor."""
     items = [(agent.specialty, agent) for agent in agents]
     return _run_agents_parallel(items, case_summary, guidelines, case_id=case_id)
 
