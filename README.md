@@ -123,7 +123,7 @@ careflow/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/duykhang-sunext/careflow.git
+git clone https://github.com/HiImSunny/careflow.git
 cd careflow
 ```
 
