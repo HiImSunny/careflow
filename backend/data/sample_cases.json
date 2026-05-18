@@ -1,0 +1,20 @@
+[
+  {
+    "id": "sample-1",
+    "title": "Chest Pain with Imaging",
+    "specialties": ["cardiology", "radiology"],
+    "text": "65-year-old male with a 2-hour history of crushing substernal chest pain radiating to the left arm, associated with diaphoresis and mild dyspnea. Past medical history significant for hypertension, hyperlipidemia, and a 30 pack-year smoking history. Current medications: lisinopril 10 mg daily, atorvastatin 40 mg nightly. Vital signs: BP 158/94 mmHg, HR 102 bpm, RR 18/min, SpO2 97% on room air. 12-lead ECG shows 2 mm ST elevation in leads V2-V4. Chest X-ray obtained. Please evaluate for acute coronary syndrome and assess imaging findings."
+  },
+  {
+    "id": "sample-2",
+    "title": "Lung Mass with Medication Review",
+    "specialties": ["radiology", "oncology", "pharmacy"],
+    "text": "58-year-old female referred for evaluation of an incidental 3.2 cm spiculated right upper lobe lung mass found on CT chest performed for unrelated reasons. Patient has a 40 pack-year smoking history and quit 5 years ago. She reports a 6 kg unintentional weight loss over the past 3 months and intermittent hemoptysis. Current medications include metformin 1000 mg twice daily for type 2 diabetes, omeprazole 20 mg daily, and ibuprofen 400 mg as needed. PET-CT shows FDG-avid right upper lobe mass with ipsilateral hilar lymphadenopathy (SUVmax 12.4). Please evaluate the imaging, provide oncological staging and treatment recommendations, and review medications for interactions with potential chemotherapy regimens."
+  },
+  {
+    "id": "sample-3",
+    "title": "Multi-Specialty Complex Case",
+    "specialties": ["cardiology", "oncology", "pharmacy", "radiology"],
+    "text": "72-year-old male with a complex medical history presenting for multidisciplinary evaluation. History includes: (1) Coronary artery disease with prior CABG 8 years ago, currently on aspirin 81 mg, clopidogrel 75 mg, metoprolol succinate 50 mg, and rosuvastatin 20 mg. (2) New diagnosis of diffuse large B-cell lymphoma (DLBCL) confirmed on axillary lymph node biopsy 2 weeks ago. (3) Stage IIIA disease on PET-CT with mediastinal and bilateral hilar lymphadenopathy, and a 4.5 cm anterior mediastinal mass causing mild tracheal deviation. (4) Echocardiogram shows EF 45% with regional wall motion abnormalities. (5) eGFR 52 mL/min/1.73m². (6) Current medications also include furosemide 40 mg daily and spironolactone 25 mg daily for heart failure with reduced ejection failure. Patient is being considered for R-CHOP chemotherapy. Please provide a comprehensive multi-specialty care plan addressing cardiac risk during chemotherapy, imaging surveillance strategy, medication management including potential drug interactions with R-CHOP, and oncological treatment recommendations."
+  }
+]

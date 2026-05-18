@@ -1,0 +1,30 @@
+{
+  "radiology": [
+    "Guideline 1: All chest X-rays should be evaluated for pneumothorax, pleural effusion, consolidation, and mediastinal widening before reporting.",
+    "Guideline 2: CT pulmonary angiography (CTPA) is the gold standard for diagnosing pulmonary embolism; use Wells score to determine pre-test probability before ordering.",
+    "Guideline 3: Lung nodules ≥6 mm detected incidentally on CT should be followed per Fleischner Society guidelines based on size, morphology, and patient risk factors.",
+    "Guideline 4: Contrast-enhanced CT is preferred for characterizing mediastinal masses, lymphadenopathy, and vascular abnormalities.",
+    "Guideline 5: MRI is the preferred modality for soft tissue characterization and evaluation of spinal cord compression without ionizing radiation."
+  ],
+  "oncology": [
+    "Guideline 1: Staging of solid tumors should follow the AJCC TNM classification system; PET-CT is recommended for staging lymphoma and many solid tumors.",
+    "Guideline 2: Tissue biopsy with histopathological confirmation is required before initiating systemic cancer therapy; liquid biopsy may supplement but not replace tissue diagnosis.",
+    "Guideline 3: Molecular profiling (EGFR, ALK, ROS1, PD-L1, KRAS) is mandatory for non-small cell lung cancer prior to first-line therapy selection.",
+    "Guideline 4: Multidisciplinary tumor board review is recommended for all newly diagnosed cancers to determine optimal treatment strategy.",
+    "Guideline 5: Patients receiving cytotoxic chemotherapy should be assessed for neutropenic fever risk; prophylactic G-CSF is indicated when risk exceeds 20%."
+  ],
+  "cardiology": [
+    "Guideline 1: Patients presenting with acute chest pain should receive a 12-lead ECG within 10 minutes of arrival; serial troponin measurements at 0 and 3 hours are required to rule out NSTEMI.",
+    "Guideline 2: High-sensitivity troponin assays should be used when available; a negative result at 0 and 1 hour using validated rapid rule-out protocols can safely exclude MI.",
+    "Guideline 3: Dual antiplatelet therapy (aspirin + P2Y12 inhibitor) is indicated for all patients with ACS unless contraindicated; duration depends on stent type and bleeding risk.",
+    "Guideline 4: Echocardiography should be performed within 24 hours for all patients with suspected new heart failure, significant valvular disease, or hemodynamic instability.",
+    "Guideline 5: Statin therapy is recommended for all patients with established atherosclerotic cardiovascular disease; high-intensity statins are preferred unless contraindicated."
+  ],
+  "pharmacy": [
+    "Guideline 1: Medication reconciliation must be performed at every care transition (admission, transfer, discharge) to identify and resolve discrepancies.",
+    "Guideline 2: Renal function (eGFR) and hepatic function should be assessed before initiating renally or hepatically cleared medications; dose adjustments are required when eGFR <60 mL/min/1.73m².",
+    "Guideline 3: Drug-drug interaction screening is mandatory when adding any new medication; particular vigilance is required for anticoagulants, antiepileptics, and immunosuppressants.",
+    "Guideline 4: Anticoagulation therapy (warfarin, DOACs, heparin) requires individualized dosing based on indication, renal function, body weight, and bleeding risk assessment.",
+    "Guideline 5: Patients on long-term corticosteroids should receive prophylaxis for osteoporosis (calcium, vitamin D, bisphosphonate) and PCP pneumonia (trimethoprim-sulfamethoxazole) per established thresholds."
+  ]
+}
