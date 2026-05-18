@@ -1,6 +1,6 @@
 # CareFlow Orchestrator
 
-A multi-agent clinical decision support platform that transforms clinician-provided inputs — typed notes, uploaded images, and spoken audio — into unified, cross-specialty care plans powered by Gemini 2.5 Pro and CrewAI.
+A multi-agent clinical decision support platform that transforms clinician-provided inputs — typed notes, uploaded images, and spoken audio — into unified, cross-specialty care plans powered by Gemini and CrewAI.
 
 Built for the **AI Agent Olympics at Milan AI Week 2026**.
 
@@ -10,7 +10,7 @@ Built for the **AI Agent Olympics at Milan AI Week 2026**.
 
 ## Project Overview
 
-CareFlow Orchestrator accepts a patient case as free-text, an image (e.g. chest X-ray, ECG), or dictated audio. A Gemini 2.5 Pro **Orchestrator Agent** decomposes the case and identifies which medical specialties are relevant. It then dispatches up to four parallel **Specialty Agents** (Radiology, Oncology, Cardiology, Pharmacy) via CrewAI. A **Coordinator Agent** reconciles their findings into a structured **Care Plan** containing:
+CareFlow Orchestrator accepts a patient case as free-text, an image (e.g. chest X-ray, ECG), or dictated audio. A Gemini **Orchestrator Agent** (model configurable via `GEMINI_MODEL`, defaults to `gemini-2.0-flash`) decomposes the case and identifies which medical specialties are relevant. It then dispatches up to four parallel **Specialty Agents** (Radiology, Oncology, Cardiology, Pharmacy). A **Coordinator Agent** reconciles their findings into a structured **Care Plan** containing:
 
 - A chronological **timeline** of recommended actions
 - A **recommendations** list
@@ -27,7 +27,7 @@ The React frontend presents the care plan in a three-panel dashboard and support
 graph TD
     A[Clinician Input<br/>text / image / audio] --> B[UploadWidget<br/>React Frontend]
     B --> C[POST /api/orchestrate<br/>FastAPI Backend]
-    C --> D[Orchestrator Agent<br/>Gemini 2.5 Pro]
+    C --> D[Orchestrator Agent<br/>Gemini API]
     D --> E[CrewAI Parallel Dispatch]
     E --> F[Radiology Agent]
     E --> G[Oncology Agent]
@@ -74,7 +74,7 @@ careflow/
 │   │   ├── chat.py              # GET /api/chat/{case_id} (SSE)
 │   │   └── speech.py            # WS /api/speech/transcribe
 │   ├── services/
-│   │   ├── gemini.py            # Gemini 2.5 Pro client (multimodal)
+│   │   ├── gemini.py            # Gemini API client (multimodal, model configurable)
 │   │   ├── speechmatics.py      # Speechmatics WebSocket client
 │   │   ├── crew.py              # CrewAI orchestration flow
 │   │   ├── export.py            # PDF + EMR text export
@@ -137,6 +137,9 @@ Open `.env` and fill in your API keys:
 
 ```dotenv
 GEMINI_API_KEY=your_gemini_api_key_here
+# Optional: override the Gemini model (default: gemini-2.0-flash)
+# Options: gemini-2.0-flash, gemini-2.0-flash-lite, gemini-1.5-flash, gemini-2.5-pro
+GEMINI_MODEL=gemini-2.0-flash
 SPEECHMATICS_API_KEY=your_speechmatics_api_key_here
 DATABASE_URL=sqlite:///./careflow.db
 ```
@@ -350,6 +353,7 @@ npm test
 5. Set **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 6. Add environment variables in the Render dashboard:
    - `GEMINI_API_KEY`
+   - `GEMINI_MODEL` — optional, defaults to `gemini-2.0-flash`
    - `SPEECHMATICS_API_KEY`
    - `DATABASE_URL` (use a persistent disk path, e.g. `/data/careflow.db`)
 
