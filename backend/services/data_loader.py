@@ -5,12 +5,38 @@ Reads JSON data files relative to the backend package root.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
-# Resolve the backend package root (parent of this file's directory)
-_PACKAGE_ROOT = Path(__file__).parent.parent
-_DATA_DIR = _PACKAGE_ROOT / "data"
+logger = logging.getLogger(__name__)
+
+# Try multiple possible locations for the data directory
+# to handle different deployment environments (local, Docker, Render)
+def _find_data_dir() -> Path:
+    candidates = [
+        # Standard: running from repo root as `python -m backend.main`
+        Path(__file__).parent.parent / "data",
+        # Docker: COPY . ./backend → /app/backend/data
+        Path("/app/backend/data"),
+        # Render: rootDir=backend, files at /opt/render/project/src/data
+        Path("/opt/render/project/src/data"),
+        # Running directly from backend/ directory
+        Path(__file__).parent / "data",
+        # CWD-relative fallback
+        Path(os.getcwd()) / "data",
+        Path(os.getcwd()) / "backend" / "data",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            logger.info("Data directory found at: %s", candidate)
+            return candidate
+    # Return the most likely path even if it doesn't exist yet
+    fallback = Path(__file__).parent.parent / "data"
+    logger.warning("Data directory not found in any candidate path, using: %s", fallback)
+    return fallback
+
+_DATA_DIR = _find_data_dir()
 
 
 def load_guidelines() -> dict:

@@ -1,9 +1,9 @@
 """
 Router for GET /api/chat/{case_id} — streams agent messages via Server-Sent Events.
 
-Agent messages are published to an in-memory asyncio.Queue keyed by case_id
-during orchestration. This endpoint reads from that queue and streams each
-message as an SSE event to the connected client.
+Agent messages are published to an in-memory store keyed by case_id during
+orchestration. This endpoint replays any already-received messages immediately
+on connect, then streams new ones as they arrive.
 
 Requirements: 5.1, 5.3, 5.4
 """
@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import AsyncIterator, Dict
+from datetime import datetime, timezone
+from typing import AsyncIterator, Dict, List, Optional
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -23,28 +24,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# In-memory event queues — keyed by case_id
+# In-memory message store — keyed by case_id
 # ---------------------------------------------------------------------------
 
-# Each value is a list of asyncio.Queue instances (one per connected SSE client).
-# Using a list allows multiple simultaneous clients for the same case_id.
-_queues: Dict[str, list[asyncio.Queue]] = {}
+# Stores all messages published for a case so late-connecting clients get them.
+_message_history: Dict[str, List[dict]] = {}
+
+# Whether orchestration is complete for a case_id (sentinel received).
+_completed: Dict[str, bool] = {}
+
+# Live subscriber queues — one per connected SSE client.
+_queues: Dict[str, List[asyncio.Queue]] = {}
+
+# Max messages to keep per case (prevents unbounded memory growth).
+_MAX_HISTORY = 200
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def get_or_create_queue(case_id: str) -> asyncio.Queue:
-    """Create and register a new queue for the given case_id.
-
-    Returns the newly created queue so the caller can subscribe to it.
-    """
     queue: asyncio.Queue = asyncio.Queue()
-    if case_id not in _queues:
-        _queues[case_id] = []
-    _queues[case_id].append(queue)
+    _queues.setdefault(case_id, []).append(queue)
     return queue
 
 
 def remove_queue(case_id: str, queue: asyncio.Queue) -> None:
-    """Remove a queue from the registry when the client disconnects."""
     if case_id in _queues:
         try:
             _queues[case_id].remove(queue)
@@ -54,27 +60,36 @@ def remove_queue(case_id: str, queue: asyncio.Queue) -> None:
             del _queues[case_id]
 
 
-def publish_agent_message(case_id: str, message: dict) -> None:
-    """Publish an agent message to all queues registered for case_id.
+def publish_agent_message(case_id: str, message: Optional[dict]) -> None:
+    """Publish an agent message (or None sentinel for completion).
 
-    This function is called from synchronous orchestration code (crew.py).
-    It uses ``asyncio.get_event_loop()`` to schedule the put on the running
-    event loop, making it safe to call from a thread pool executor.
-
-    Args:
-        case_id: The case identifier.
-        message: A dict with keys ``agent``, ``content``, ``timestamp``.
+    Called from synchronous orchestration code via ThreadPoolExecutor.
+    Stores the message in history and fans out to all live subscribers.
     """
-    if case_id not in _queues:
+    if message is None:
+        # Sentinel — mark orchestration complete and notify subscribers.
+        _completed[case_id] = True
+        for queue in list(_queues.get(case_id, [])):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
+                else:
+                    queue.put_nowait(None)
+            except Exception:
+                pass
         return
 
+    # Store in history (capped).
+    history = _message_history.setdefault(case_id, [])
+    if len(history) < _MAX_HISTORY:
+        history.append(message)
+
+    # Fan out to live subscribers.
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
-        # No running event loop — messages cannot be delivered.
-        logger.warning(
-            "No running event loop; cannot publish agent message for case_id=%s", case_id
-        )
+        logger.warning("No event loop; cannot publish message for case_id=%s", case_id)
         return
 
     for queue in list(_queues.get(case_id, [])):
@@ -84,42 +99,54 @@ def publish_agent_message(case_id: str, message: dict) -> None:
             try:
                 queue.put_nowait(message)
             except asyncio.QueueFull:
-                logger.warning("Queue full for case_id=%s — dropping message.", case_id)
+                pass
 
 
 # ---------------------------------------------------------------------------
-# SSE endpoint
+# SSE event generator
 # ---------------------------------------------------------------------------
-
-_SENTINEL = object()  # signals end-of-stream
-
 
 async def _event_generator(case_id: str) -> AsyncIterator[str]:
-    """Yield SSE-formatted strings from the queue for case_id.
+    """Yield SSE-formatted strings for the given case_id.
 
-    Yields messages until a ``None`` sentinel is received (orchestration done)
-    or the client disconnects.
+    1. Immediately replays all historical messages for this case.
+    2. If orchestration is already complete, sends the completion event and exits.
+    3. Otherwise subscribes to live updates and streams until completion.
     """
+    # 1. Replay history
+    for msg in list(_message_history.get(case_id, [])):
+        yield f"data: {json.dumps(msg)}\n\n"
+
+    # 2. Already done — send completion and exit
+    if _completed.get(case_id):
+        completion = {
+            "agent": "system",
+            "content": "Care plan ready",
+            "timestamp": _utc_now(),
+            "type": "complete",
+        }
+        yield f"data: {json.dumps(completion)}\n\n"
+        return
+
+    # 3. Subscribe to live updates
     queue = get_or_create_queue(case_id)
     try:
         while True:
             try:
-                # Poll with a short timeout so we can detect client disconnects.
                 message = await asyncio.wait_for(queue.get(), timeout=60.0)
             except asyncio.TimeoutError:
-                # Send a keep-alive comment to prevent proxy timeouts.
                 yield ": keep-alive\n\n"
                 continue
 
             if message is None:
-                # Sentinel — orchestration complete.
-                completion_event = {
+                # Orchestration complete
+                completion = {
                     "agent": "system",
                     "content": "Care plan ready",
                     "timestamp": _utc_now(),
                     "type": "complete",
                 }
-                yield f"data: {json.dumps(completion_event)}\n\n"
+                yield f"data: {json.dumps(completion)}\n\n"
                 break
 
             yield f"data: {json.dumps(message)}\n\n"
@@ -127,20 +154,16 @@ async def _event_generator(case_id: str) -> AsyncIterator[str]:
         remove_queue(case_id, queue)
 
 
-def _utc_now() -> str:
-    """Return the current UTC time as an ISO 8601 string."""
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat()
-
+# ---------------------------------------------------------------------------
+# SSE endpoint
+# ---------------------------------------------------------------------------
 
 @router.get("/chat/{case_id}")
 async def chat_stream(case_id: str) -> StreamingResponse:
     """Stream agent messages for a given case as Server-Sent Events.
 
-    The client should open an ``EventSource`` to this endpoint.  Each event
-    carries a JSON-encoded ``AgentMessage`` in the ``data`` field.  A final
-    event with ``type: "complete"`` is sent when orchestration finishes.
+    Replays historical messages immediately on connect, then streams live
+    updates. Sends a final ``type: complete`` event when orchestration finishes.
 
     Requirements: 5.1, 5.3, 5.4
     """
