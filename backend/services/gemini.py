@@ -50,9 +50,9 @@ class GeminiService:
             )
 
         genai.configure(api_key=resolved_key)
-        # Use model name from env var GEMINI_MODEL, defaulting to gemini-2.0-flash
-        # which has a much higher free-tier quota than gemini-2.5-pro.
-        model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        # Use model name from env var GEMINI_MODEL, defaulting to gemini-3.1-flash-lite
+        # which has the highest free-tier quota (15 RPM, 500 RPD, 250K TPM).
+        model_name = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
         self._model = genai.GenerativeModel(model_name)
 
     def generate(self, prompt: str, image_b64: Optional[str] = None) -> str:

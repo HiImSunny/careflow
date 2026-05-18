@@ -137,9 +137,9 @@ Open `.env` and fill in your API keys:
 
 ```dotenv
 GEMINI_API_KEY=your_gemini_api_key_here
-# Optional: override the Gemini model (default: gemini-2.0-flash)
-# Options: gemini-2.0-flash, gemini-2.0-flash-lite, gemini-1.5-flash, gemini-2.5-pro
-GEMINI_MODEL=gemini-2.0-flash
+# Optional: override the Gemini model (default: gemini-3.1-flash-lite)
+# Options: gemini-3.1-flash-lite, gemini-2.5-flash, gemini-3-flash, gemini-2.5-pro
+GEMINI_MODEL=gemini-3.1-flash-lite
 SPEECHMATICS_API_KEY=your_speechmatics_api_key_here
 DATABASE_URL=sqlite:///./careflow.db
 ```
