@@ -25,7 +25,7 @@ function hasContent(value: string | null | undefined): boolean {
 export function UploadWidget(): React.ReactElement {
   const { caseText, caseImage, setCaseText, setCaseImage } = useCaseStore();
   const { orchestrate, loading } = useOrchestrate();
-  const { isRecording, startRecording, stopRecording, error: speechError } =
+  const { isRecording, startRecording, stopRecording, error: speechError, engine } =
     useSpeech();
 
   const [dragOver, setDragOver] = useState(false);
@@ -209,7 +209,7 @@ export function UploadWidget(): React.ReactElement {
           aria-label={isRecording ? 'Stop recording' : 'Start recording'}
           aria-pressed={isRecording}
           className={[
-            'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+            'flex h-10 flex-shrink-0 items-center justify-center gap-1.5 rounded-full border px-3 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
             isRecording
               ? 'border-red-500 bg-red-50 text-red-600 hover:bg-red-100'
               : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50',
@@ -219,12 +219,17 @@ export function UploadWidget(): React.ReactElement {
             .join(' ')}
         >
           {isRecording ? (
-            <MicOff className="h-5 w-5" aria-hidden="true" />
+            <MicOff className="h-4 w-4" aria-hidden="true" />
           ) : (
-            <Mic className="h-5 w-5" aria-hidden="true" />
+            <Mic className="h-4 w-4" aria-hidden="true" />
+          )}
+          {isRecording && engine === 'webspeech' && (
+            <span className="text-xs font-medium">Browser</span>
+          )}
+          {isRecording && engine === 'speechmatics' && (
+            <span className="text-xs font-medium">Speechmatics</span>
           )}
         </button>
-
         {/* Submit button */}
         <button
           type="submit"

@@ -1,15 +1,12 @@
 /**
- * useSpeech — real-time speech-to-text hook via WebSocket + MediaRecorder.
+ * useSpeech — real-time speech-to-text hook with automatic fallback.
  *
- * Behaviour:
- * - `startRecording()`: requests microphone permission, opens a WebSocket to
- *   `/api/speech/transcribe`, and streams audio/webm chunks via MediaRecorder.
- * - `stopRecording()`: stops the MediaRecorder, closes the WebSocket, and
- *   sets `isRecording` to false.
- * - Each transcription message received over the WebSocket is appended to the
- *   local `transcript` state and also appended to `caseText` in the Zustand
- *   store via `setCaseText`.
- * - WebSocket errors set the `error` state and revert `isRecording` to false.
+ * Strategy:
+ *  1. Try the backend WebSocket → Speechmatics pipeline first.
+ *  2. If the WebSocket fails to open OR the backend signals it has no
+ *     Speechmatics key (sends {"type":"done"} immediately with no text),
+ *     automatically fall back to the browser's Web Speech API.
+ *  3. If the browser doesn't support Web Speech API either, surface an error.
  *
  * Requirements: 9.1, 9.3, 9.4, 9.5
  */
@@ -18,151 +15,291 @@ import { useCallback, useRef, useState } from 'react';
 import { useCaseStore } from '@/store/caseStore';
 import { wsUrl } from '@/lib/api';
 
-/** Return type of the useSpeech hook. */
 export interface UseSpeechResult {
   isRecording: boolean;
   startRecording: () => void;
   stopRecording: () => void;
   transcript: string;
   error: string | null;
+  /** Which engine is currently active */
+  engine: 'speechmatics' | 'webspeech' | 'mock' | null;
 }
 
-/** MIME type used for MediaRecorder audio chunks. */
 const AUDIO_MIME_TYPE = 'audio/webm';
-
-/** WebSocket endpoint for real-time transcription. */
 const WS_ENDPOINT = '/api/speech/transcribe';
 
-/**
- * Builds the WebSocket URL, using VITE_API_URL in production or
- * deriving from the current page origin in development.
- */
-function buildWsUrl(): string {
-  return wsUrl(WS_ENDPOINT);
+// ── Web Speech API type declarations (not in all TS libs) ─────────────────
+
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
 }
 
-/**
- * Real implementation of the speech hook.
- * Manages microphone access, MediaRecorder lifecycle, and WebSocket connection.
- */
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((e: SpeechRecognitionEvent) => void) | null;
+  onerror: ((e: SpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition?: new () => SpeechRecognition;
+    webkitSpeechRecognition?: new () => SpeechRecognition;
+  }
+}
+
+function getSpeechRecognition(): (new () => SpeechRecognition) | null {
+  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+}
+
+// ── Hook ──────────────────────────────────────────────────────────────────
+
 export function useSpeech(): UseSpeechResult {
   const { caseText, setCaseText } = useCaseStore();
 
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [engine, setEngine] = useState<UseSpeechResult['engine']>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const caseTextRef = useRef(caseText);
   caseTextRef.current = caseText;
 
+  // ── Append helper ────────────────────────────────────────────────────────
+
+  const appendText = useCallback(
+    (newText: string) => {
+      if (!newText) return;
+      setTranscript((prev) => prev + newText);
+      setCaseText(caseTextRef.current + newText);
+    },
+    [setCaseText],
+  );
+
+  // ── Stop (works for both engines) ────────────────────────────────────────
+
   const stopRecording = useCallback(() => {
+    // Stop MediaRecorder
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
     mediaRecorderRef.current = null;
 
+    // Release mic stream
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
 
+    // Close WebSocket
     if (socketRef.current) {
       socketRef.current.close();
       socketRef.current = null;
     }
 
+    // Stop Web Speech API
+    if (recognitionRef.current) {
+      recognitionRef.current.abort();
+      recognitionRef.current = null;
+    }
+
     setIsRecording(false);
+    setEngine(null);
   }, []);
+
+  // ── Web Speech API fallback ───────────────────────────────────────────────
+
+  const startWebSpeech = useCallback(() => {
+    const SpeechRecognitionCtor = getSpeechRecognition();
+    if (!SpeechRecognitionCtor) {
+      setError(
+        'Speech recognition is not supported in this browser. ' +
+          'Please use Chrome or Edge, or provide a Speechmatics API key.',
+      );
+      setIsRecording(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognitionRef.current = recognition;
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interim = '';
+      let final = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          final += result[0].transcript;
+        } else {
+          interim += result[0].transcript;
+        }
+      }
+      if (final) appendText(final);
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (event.error !== 'aborted') {
+        setError(`Speech recognition error: ${event.error}`);
+      }
+      stopRecording();
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+      setEngine(null);
+    };
+
+    recognition.start();
+    setEngine('webspeech');
+    setIsRecording(true);
+  }, [appendText, stopRecording]);
+
+  // ── Speechmatics via WebSocket ────────────────────────────────────────────
+
+  const startSpeechmatics = useCallback(
+    async (stream: MediaStream) => {
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(wsUrl(WS_ENDPOINT));
+      } catch {
+        // WebSocket constructor failed — fall back immediately
+        stream.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        startWebSpeech();
+        return;
+      }
+      socketRef.current = socket;
+
+      // Track whether we received any real transcript text
+      let receivedText = false;
+
+      // Timeout: if socket doesn't open within 3 s, fall back
+      const openTimeout = setTimeout(() => {
+        if (socket.readyState !== WebSocket.OPEN) {
+          socket.close();
+          stream.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+          startWebSpeech();
+        }
+      }, 3000);
+
+      socket.onopen = () => {
+        clearTimeout(openTimeout);
+
+        const mimeType = MediaRecorder.isTypeSupported(AUDIO_MIME_TYPE)
+          ? AUDIO_MIME_TYPE
+          : '';
+        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        mediaRecorderRef.current = recorder;
+
+        recorder.ondataavailable = (event: BlobEvent) => {
+          if (event.data.size > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
+            socketRef.current.send(event.data);
+          }
+        };
+
+        recorder.start(250);
+        setEngine('speechmatics');
+        setIsRecording(true);
+      };
+
+      socket.onmessage = (event: MessageEvent) => {
+        if (typeof event.data === 'string') {
+          try {
+            const parsed = JSON.parse(event.data) as Record<string, unknown>;
+
+            // Backend signals done with no real transcription → mock mode
+            // Fall back to Web Speech API for a better UX
+            if (parsed.type === 'done' && !receivedText) {
+              stopRecording();
+              startWebSpeech();
+              return;
+            }
+
+            if (parsed.type === 'error') {
+              // Backend Speechmatics error → fall back
+              stopRecording();
+              startWebSpeech();
+              return;
+            }
+
+            const text =
+              typeof parsed.transcript === 'string'
+                ? parsed.transcript
+                : typeof parsed.text === 'string'
+                  ? parsed.text
+                  : null;
+
+            if (text) {
+              receivedText = true;
+              appendText(text);
+            }
+          } catch {
+            // Plain text transcript
+            if (event.data.trim()) {
+              receivedText = true;
+              appendText(event.data);
+            }
+          }
+        }
+      };
+
+      socket.onerror = () => {
+        clearTimeout(openTimeout);
+        // WebSocket error → fall back to Web Speech API
+        stopRecording();
+        startWebSpeech();
+      };
+
+      socket.onclose = (event: CloseEvent) => {
+        clearTimeout(openTimeout);
+        if (!event.wasClean && event.code !== 1000 && !receivedText) {
+          // Closed without any transcript → fall back
+          startWebSpeech();
+        }
+        setIsRecording(false);
+      };
+    },
+    [appendText, startWebSpeech, stopRecording],
+  );
+
+  // ── Public startRecording ─────────────────────────────────────────────────
 
   const startRecording = useCallback(async () => {
     setError(null);
 
-    // 1. Request microphone permission
+    // Request mic permission
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : 'Microphone access denied. Please allow microphone access and try again.';
-      setError(message);
+      // Mic denied → try Web Speech API (it handles its own permission)
+      startWebSpeech();
       return;
     }
     streamRef.current = stream;
 
-    // 2. Open WebSocket connection
-    let socket: WebSocket;
-    try {
-      socket = new WebSocket(buildWsUrl());
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to open speech service connection.';
-      setError(message);
-      stream.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      return;
-    }
-    socketRef.current = socket;
+    // Try Speechmatics first; it will fall back to Web Speech API on failure
+    await startSpeechmatics(stream);
+  }, [startSpeechmatics, startWebSpeech]);
 
-    socket.onopen = () => {
-      // 3. Start MediaRecorder once the socket is open
-      const mimeType = MediaRecorder.isTypeSupported(AUDIO_MIME_TYPE) ? AUDIO_MIME_TYPE : '';
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (event: BlobEvent) => {
-        if (event.data.size > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
-          socketRef.current.send(event.data);
-        }
-      };
-
-      recorder.start(250);
-      setIsRecording(true);
-    };
-
-    // 4. Handle incoming transcription messages
-    socket.onmessage = (event: MessageEvent) => {
-      let newText = '';
-
-      if (typeof event.data === 'string') {
-        try {
-          const parsed = JSON.parse(event.data) as Record<string, unknown>;
-          if (typeof parsed.transcript === 'string') {
-            newText = parsed.transcript;
-          } else if (typeof parsed.text === 'string') {
-            newText = parsed.text;
-          } else {
-            newText = event.data;
-          }
-        } catch {
-          newText = event.data;
-        }
-      }
-
-      if (newText) {
-        setTranscript((prev) => prev + newText);
-        setCaseText(caseTextRef.current + newText);
-      }
-    };
-
-    // 5. Handle WebSocket errors
-    socket.onerror = () => {
-      setError('Speech service connection error. Please try again.');
-      stopRecording();
-    };
-
-    socket.onclose = (event: CloseEvent) => {
-      if (!event.wasClean && event.code !== 1000 && isRecording) {
-        setError('Speech service connection closed unexpectedly.');
-      }
-      setIsRecording(false);
-    };
-  }, [setCaseText, stopRecording]);
-
-  return { isRecording, startRecording, stopRecording, transcript, error };
+  return { isRecording, startRecording, stopRecording, transcript, error, engine };
 }
