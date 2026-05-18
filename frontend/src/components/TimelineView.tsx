@@ -104,7 +104,9 @@ export interface TimelineViewProps {
 export function TimelineView({ timeline: timelineProp }: TimelineViewProps = {}): React.ReactElement {
   const storeTimeline = useCaseStore((state) => state.carePlan?.timeline ?? []);
   const loading = useCaseStore((state) => state.loading);
-  const timeline = timelineProp ?? storeTimeline;
+  const rawTimeline = timelineProp ?? storeTimeline;
+  // Defensive: ensure it's actually an array
+  const timeline = Array.isArray(rawTimeline) ? rawTimeline : [];
 
   if (loading) {
     return <TimelineSkeleton />;

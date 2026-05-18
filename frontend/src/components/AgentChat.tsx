@@ -130,7 +130,9 @@ export function AgentChat({ messages: messagesProp, caseId: caseIdProp }: AgentC
 
   // Use prop overrides when provided (for testing / controlled usage).
   const caseId = caseIdProp ?? storeCaseId;
-  const messages = messagesProp ?? storeMessages;
+  const rawMessages = messagesProp ?? storeMessages;
+  // Defensive: ensure it's actually an array
+  const messages = Array.isArray(rawMessages) ? rawMessages : [];
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [isComplete, setIsComplete] = useState(false);

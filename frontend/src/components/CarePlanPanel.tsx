@@ -249,15 +249,21 @@ export function CarePlanPanel(): React.ReactElement {
     return <CarePlanPlaceholder />;
   }
 
+  // Defensive: ensure arrays are actually arrays (API may return unexpected shapes)
+  const alerts = Array.isArray(carePlan.alerts) ? carePlan.alerts : [];
+  const recommendations = Array.isArray(carePlan.recommendations) ? carePlan.recommendations : [];
+  const findings = carePlan.findings && typeof carePlan.findings === 'object' ? carePlan.findings : {};
+  const safePlan = { ...carePlan, alerts, recommendations, findings };
+
   return (
     <section aria-label="Care plan panel" className="space-y-6">
       {/* Alerts — shown first so critical info is immediately visible */}
-      {carePlan.alerts.length > 0 && (
+      {safePlan.alerts.length > 0 && (
         <div>
           <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-red-600">
             Alerts
           </h3>
-          <AlertsSection alerts={carePlan.alerts} />
+          <AlertsSection alerts={safePlan.alerts} />
         </div>
       )}
 
@@ -266,7 +272,7 @@ export function CarePlanPanel(): React.ReactElement {
         <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Findings by Specialty
         </h3>
-        <FindingsSection carePlan={carePlan} />
+        <FindingsSection carePlan={safePlan} />
       </div>
 
       {/* Recommendations */}
@@ -274,7 +280,7 @@ export function CarePlanPanel(): React.ReactElement {
         <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Recommendations
         </h3>
-        <RecommendationsSection recommendations={carePlan.recommendations} />
+        <RecommendationsSection recommendations={safePlan.recommendations} />
       </div>
     </section>
   );

@@ -50,7 +50,8 @@ export function SampleCases() {
       try {
         const response = await axios.get<SampleCase[]>('/api/cases/samples');
         if (!cancelled) {
-          setSamples(response.data);
+          const data = response.data;
+          setSamples(Array.isArray(data) ? data : []);
         }
       } catch (err) {
         if (!cancelled) {
