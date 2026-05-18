@@ -12,6 +12,7 @@ import React, { useState } from 'react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { FileText, FileDown, Loader2 } from 'lucide-react';
 import { useCaseStore } from '@/store/caseStore';
+import { apiUrl } from '@/lib/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -27,7 +28,7 @@ async function triggerDownload(
   caseId: string,
   format: ExportFormat,
 ): Promise<string | null> {
-  const url = `/api/export/${format}/${encodeURIComponent(caseId)}`;
+  const url = apiUrl(`/api/export/${format}/${encodeURIComponent(caseId)}`);
   try {
     const response = await fetch(url);
     if (!response.ok) {

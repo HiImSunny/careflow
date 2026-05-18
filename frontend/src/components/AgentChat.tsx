@@ -11,6 +11,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bot, CheckCircle2, Loader2 } from 'lucide-react';
 import { useCaseStore } from '@/store/caseStore';
+import { apiUrl } from '@/lib/api';
 import type { AgentMessage } from '@/types';
 
 // ── Agent badge colours ────────────────────────────────────────────────────
@@ -157,7 +158,7 @@ export function AgentChat({ messages: messagesProp, caseId: caseIdProp }: AgentC
     setIsStreaming(true);
     setIsComplete(false);
 
-    const es = new EventSource(`/api/chat/${caseId}`);
+    const es = new EventSource(apiUrl(`/api/chat/${caseId}`));
     eventSourceRef.current = es;
 
     es.onmessage = (event: MessageEvent) => {

@@ -10,6 +10,7 @@
 
 import axios from 'axios';
 import { useCaseStore } from '@/store/caseStore';
+import { apiUrl } from '@/lib/api';
 import type { OrchestrateInput, CarePlan } from '@/types';
 
 /** Return type of the useOrchestrate hook. */
@@ -138,7 +139,7 @@ export function useOrchestrate(): UseOrchestrateResult {
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const response = await axios.post<CarePlan>('/api/orchestrate', payload);
+        const response = await axios.post<CarePlan>(apiUrl('/api/orchestrate'), payload);
         setCarePlan(response.data);
         setLoading(false);
         return;
