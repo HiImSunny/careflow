@@ -50,7 +50,10 @@ class GeminiService:
             )
 
         genai.configure(api_key=resolved_key)
-        self._model = genai.GenerativeModel("gemini-2.5-pro")
+        # Use model name from env var GEMINI_MODEL, defaulting to gemini-2.0-flash
+        # which has a much higher free-tier quota than gemini-2.5-pro.
+        model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self._model = genai.GenerativeModel(model_name)
 
     def generate(self, prompt: str, image_b64: Optional[str] = None) -> str:
         """Generate a text response from Gemini 2.5 Pro.
