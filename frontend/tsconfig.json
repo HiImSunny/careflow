@@ -14,7 +14,10 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Strict mode */
+    /* Vite env types */
+    "types": ["vite/client"],
+
+    /* Strict mode — relaxed for test files via exclude */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -27,5 +30,11 @@
     }
   },
   "include": ["src"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
