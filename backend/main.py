@@ -27,8 +27,16 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup() -> None:
-    """Initialize the database schema on application startup."""
+    """Initialize the database schema and capture the main event loop."""
+    import asyncio
     init_db()
+    # Capture the running event loop so ThreadPoolExecutor workers in crew.py
+    # can publish SSE messages via chat.set_main_loop().
+    try:
+        from backend.routers.chat import set_main_loop
+        set_main_loop(asyncio.get_running_loop())
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

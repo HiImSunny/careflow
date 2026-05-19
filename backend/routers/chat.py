@@ -24,6 +24,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
+# Main event loop reference — captured at startup so worker threads can use it
+# ---------------------------------------------------------------------------
+
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Store a reference to the main asyncio event loop.
+    Called from app startup so ThreadPoolExecutor workers can publish messages.
+    """
+    global _main_loop
+    _main_loop = loop
+
+# ---------------------------------------------------------------------------
 # In-memory message store — keyed by case_id
 # ---------------------------------------------------------------------------
 
@@ -69,15 +83,10 @@ def publish_agent_message(case_id: str, message: Optional[dict]) -> None:
     if message is None:
         # Sentinel — mark orchestration complete and notify subscribers.
         _completed[case_id] = True
-        for queue in list(_queues.get(case_id, [])):
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.call_soon_threadsafe(queue.put_nowait, None)
-                else:
-                    queue.put_nowait(None)
-            except Exception:
-                pass
+        loop = _main_loop
+        if loop and loop.is_running():
+            for queue in list(_queues.get(case_id, [])):
+                loop.call_soon_threadsafe(queue.put_nowait, None)
         return
 
     # Store in history (capped).
@@ -86,20 +95,14 @@ def publish_agent_message(case_id: str, message: Optional[dict]) -> None:
         history.append(message)
 
     # Fan out to live subscribers.
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        logger.warning("No event loop; cannot publish message for case_id=%s", case_id)
-        return
-
-    for queue in list(_queues.get(case_id, [])):
-        if loop.is_running():
+    loop = _main_loop
+    if loop and loop.is_running():
+        for queue in list(_queues.get(case_id, [])):
             loop.call_soon_threadsafe(queue.put_nowait, message)
-        else:
-            try:
-                queue.put_nowait(message)
-            except asyncio.QueueFull:
-                pass
+    else:
+        logger.warning(
+            "No running event loop; cannot publish message for case_id=%s", case_id
+        )
 
 
 # ---------------------------------------------------------------------------
