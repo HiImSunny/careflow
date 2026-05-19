@@ -1,7 +1,11 @@
 """
 Router for:
-  POST /orchestrate              — validates input, runs orchestration pipeline,
-                                   persists the Case record, and returns CarePlanResponse.
+  POST /orchestrate              — accepts the request, starts orchestration as a
+                                   background task, and returns {case_id, status}
+                                   immediately (202 Accepted) so the frontend can
+                                   connect SSE and watch messages stream in real-time.
+  GET  /orchestrate/{case_id}/result
+                                 — returns the completed care plan once ready.
   GET  /export/pdf/{case_id}     — returns the care plan as a PDF file download.
   GET  /export/emr/{case_id}     — returns the care plan as a plain-text EMR file download.
 """
@@ -12,8 +16,8 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -29,22 +33,115 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/orchestrate", response_model=CarePlanResponse, status_code=200)
+# ---------------------------------------------------------------------------
+# Background orchestration task
+# ---------------------------------------------------------------------------
+
+
+def _run_orchestration_background(
+    request: OrchestrateRequest,
+    guidelines: dict,
+) -> None:
+    """Run orchestration synchronously in a background thread.
+
+    Persists the Case record and stores the care plan result so the frontend
+    can fetch it via GET /api/orchestrate/{case_id}/result.
+
+    This function is intentionally synchronous — FastAPI's BackgroundTasks
+    runs it in a thread pool, which is exactly what we want so that
+    ``run_orchestration`` (and its ThreadPoolExecutor workers) can call
+    ``publish_agent_message`` via ``loop.call_soon_threadsafe``.
+    """
+    from backend.database import SessionLocal  # local import to avoid circular deps
+    from backend.routers.chat import store_result
+
+    case_id = request.case_id
+    assert case_id is not None  # always set before this is called
+
+    try:
+        care_plan = run_orchestration(request, guidelines)
+    except GeminiServiceError as exc:
+        logger.error("Gemini service error during background orchestration: %s", exc)
+        # Publish an error event so the SSE client knows something went wrong.
+        try:
+            from backend.routers.chat import publish_agent_message
+            from datetime import datetime, timezone
+            publish_agent_message(
+                case_id,
+                {
+                    "agent": "system",
+                    "content": f"Orchestration failed: {exc}",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "type": "error",
+                },
+            )
+            publish_agent_message(case_id, None)  # close SSE stream
+        except Exception:
+            pass
+        return
+    except Exception as exc:
+        logger.exception("Unexpected error during background orchestration: %s", exc)
+        try:
+            from backend.routers.chat import publish_agent_message
+            from datetime import datetime, timezone
+            publish_agent_message(
+                case_id,
+                {
+                    "agent": "system",
+                    "content": f"Orchestration error: {exc}",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "type": "error",
+                },
+            )
+            publish_agent_message(case_id, None)
+        except Exception:
+            pass
+        return
+
+    # Store result so frontend can fetch it after the SSE "complete" event.
+    store_result(case_id, care_plan.model_dump())
+
+    # Persist Case record to the database.
+    db: Session = SessionLocal()
+    try:
+        case_record = Case(
+            id=care_plan.case_id,
+            input_text=request.text,
+            image_ref=None,
+            care_plan_json=care_plan.model_dump_json(),
+        )
+        db.add(case_record)
+        db.commit()
+    except Exception as exc:
+        logger.exception("Database persistence error in background task: %s", exc)
+        db.rollback()
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# POST /orchestrate — returns 202 immediately, runs orchestration in background
+# ---------------------------------------------------------------------------
+
+
+@router.post("/orchestrate", status_code=202)
 async def orchestrate(
     request: OrchestrateRequest,
-    db: Session = Depends(get_db),
-) -> CarePlanResponse:
-    """Run the multi-agent orchestration pipeline for a submitted clinical case.
+    background_tasks: BackgroundTasks,
+) -> JSONResponse:
+    """Accept a clinical case and start orchestration as a background task.
 
-    - Validates that at least one of text or image_b64 is present (422 if not).
-    - Calls ``run_orchestration()`` to produce a ``CarePlan``.
-    - Persists a ``Case`` record to SQLite.
-    - Returns a ``CarePlanResponse``.
+    Returns 202 Accepted with ``{case_id, status: "processing"}`` immediately
+    so the frontend can connect to the SSE stream before any agent work begins.
+
+    The frontend should:
+    1. Receive the ``case_id`` from this response.
+    2. Connect to ``GET /api/chat/{case_id}`` to stream agent messages.
+    3. When the SSE ``type: complete`` event arrives, fetch
+       ``GET /api/orchestrate/{case_id}/result`` for the full care plan.
 
     Raises:
         HTTPException 422: When no input is provided.
-        HTTPException 502: When the Gemini service returns an error.
-        HTTPException 500: On unexpected errors.
     """
     # ------------------------------------------------------------------
     # 1. Input validation
@@ -59,56 +156,47 @@ async def orchestrate(
     if not request.case_id:
         request = request.model_copy(update={"case_id": str(uuid.uuid4())})
 
-    # ------------------------------------------------------------------
-    # 2. Load guidelines and run orchestration
-    # ------------------------------------------------------------------
-    try:
-        guidelines = load_guidelines()
-        care_plan = run_orchestration(request, guidelines)
-    except GeminiServiceError as exc:
-        logger.error("Gemini service error during orchestration: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Upstream AI service error: {exc}",
-        ) from exc
-    except Exception as exc:
-        logger.exception("Unexpected error during orchestration: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Orchestration error: {exc}",
-        ) from exc
+    case_id = request.case_id
 
     # ------------------------------------------------------------------
-    # 3. Persist Case record
+    # 2. Load guidelines (fast, synchronous) and enqueue background task
     # ------------------------------------------------------------------
-    try:
-        case_record = Case(
-            id=care_plan.case_id,
-            input_text=request.text,
-            image_ref=None,  # image stored as b64 in request; no file ref needed
-            care_plan_json=care_plan.model_dump_json(),
-        )
-        db.add(case_record)
-        db.commit()
-        db.refresh(case_record)
-    except Exception as exc:
-        logger.exception("Database persistence error: %s", exc)
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Persistence error: {exc}",
-        ) from exc
+    guidelines = load_guidelines()
+    background_tasks.add_task(_run_orchestration_background, request, guidelines)
 
     # ------------------------------------------------------------------
-    # 4. Return response
+    # 3. Return immediately so the frontend can connect SSE
     # ------------------------------------------------------------------
-    return CarePlanResponse(
-        case_id=care_plan.case_id,
-        timeline=care_plan.timeline,
-        recommendations=care_plan.recommendations,
-        alerts=care_plan.alerts,
-        findings=care_plan.findings,
+    return JSONResponse(
+        status_code=202,
+        content={"case_id": case_id, "status": "processing"},
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /orchestrate/{case_id}/result — returns care plan once ready
+# ---------------------------------------------------------------------------
+
+
+@router.get("/orchestrate/{case_id}/result")
+async def orchestrate_result(case_id: str) -> JSONResponse:
+    """Return the completed care plan for *case_id*.
+
+    The frontend fetches this after receiving the ``type: complete`` SSE event.
+
+    Returns:
+        200 with the care plan JSON when ready.
+        404 when the result is not yet available.
+    """
+    from backend.routers.chat import get_result
+
+    result = get_result(case_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result for case '{case_id}' is not yet available.",
+        )
+    return JSONResponse(content=result)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,12 @@
 /**
  * Custom hook for submitting cases to the orchestration API.
  *
+ * Flow:
+ * 1. POST /api/orchestrate → receives {case_id, status: "processing"} (202)
+ * 2. Sets pendingCaseId so AgentChat connects to SSE immediately
+ * 3. When SSE emits type:"complete", fetches /api/orchestrate/{case_id}/result
+ * 4. Calls setCarePlan() and setLoading(false)
+ *
  * Includes 1 automatic retry on network errors before surfacing the error
  * to the user. API error responses are converted to user-friendly messages
  * (never raw JSON).
@@ -8,6 +14,7 @@
  * Requirements: 1.1, 1.2, 4.4, 4.5, 1.5
  */
 
+import { useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useCaseStore } from '@/store/caseStore';
 import { apiUrl } from '@/lib/api';
@@ -112,23 +119,34 @@ function extractErrorMessage(err: unknown): string {
  * Hook that wraps the POST /api/orchestrate call.
  * Manages loading and error state via the Zustand store.
  * Automatically retries once on network errors before surfacing to the user.
+ *
+ * After receiving the case_id (202), it opens an SSE connection to watch
+ * agent messages stream in real-time. When the SSE "complete" event fires,
+ * it fetches the full care plan from /api/orchestrate/{case_id}/result.
  */
 export function useOrchestrate(): UseOrchestrateResult {
   const { loading, error, caseImage, setCarePlan, setLoading, setError, setPendingCaseId } =
     useCaseStore();
   const clearMessages = () => useCaseStore.setState({ agentMessages: [], carePlan: null });
 
+  // Track the active SSE connection so we can close it on unmount or new submission.
+  const sseRef = useRef<EventSource | null>(null);
+
+  // Clean up SSE on unmount.
+  useEffect(() => {
+    return () => {
+      sseRef.current?.close();
+    };
+  }, []);
+
   const orchestrate = async (input: OrchestrateInput): Promise<void> => {
+    // Close any previous SSE connection.
+    sseRef.current?.close();
+    sseRef.current = null;
+
     setLoading(true);
     setError(null);
     clearMessages();
-
-    // Generate case_id upfront so AgentChat can connect SSE before POST completes
-    const case_id = crypto.randomUUID();
-    setPendingCaseId(case_id);
-
-    // Give SSE connection 200ms head start before firing the POST
-    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Convert image File to base64 once (before retry loop)
     let image_b64: string | undefined = input.image_b64;
@@ -138,35 +156,104 @@ export function useOrchestrate(): UseOrchestrateResult {
       } catch {
         setError('Failed to process the uploaded image. Please try again.');
         setLoading(false);
-        setPendingCaseId(null);
         return;
       }
     }
 
-    const payload: OrchestrateInput = { ...input, image_b64, case_id };
+    const payload: OrchestrateInput = { ...input, image_b64 };
 
     let lastError: unknown = null;
+    let case_id: string | null = null;
 
+    // ------------------------------------------------------------------
+    // Step 1: POST to /api/orchestrate — get case_id back immediately (202)
+    // ------------------------------------------------------------------
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const response = await axios.post<CarePlan>(apiUrl('/api/orchestrate'), payload);
-        setCarePlan(response.data);
-        setLoading(false);
-        setPendingCaseId(null);
-        return;
+        const response = await axios.post<{ case_id: string; status: string }>(
+          apiUrl('/api/orchestrate'),
+          payload,
+        );
+        case_id = response.data.case_id;
+        break;
       } catch (err: unknown) {
         lastError = err;
         if (attempt < MAX_RETRIES && isNetworkError(err)) {
           await new Promise((resolve) => setTimeout(resolve, 500));
           continue;
         }
-        break;
+        setError(extractErrorMessage(lastError));
+        setLoading(false);
+        return;
       }
     }
 
-    setError(extractErrorMessage(lastError));
-    setLoading(false);
-    setPendingCaseId(null);
+    if (!case_id) {
+      setError('Failed to start orchestration. Please try again.');
+      setLoading(false);
+      return;
+    }
+
+    // ------------------------------------------------------------------
+    // Step 2: Set pendingCaseId so AgentChat connects to SSE
+    // ------------------------------------------------------------------
+    setPendingCaseId(case_id);
+
+    // ------------------------------------------------------------------
+    // Step 3: Open SSE connection and wait for "complete" event
+    // ------------------------------------------------------------------
+    const capturedCaseId = case_id;
+    const sse = new EventSource(apiUrl(`/api/chat/${capturedCaseId}`));
+    sseRef.current = sse;
+
+    sse.onmessage = async (event: MessageEvent) => {
+      try {
+        const msg = JSON.parse(event.data as string) as {
+          type?: string;
+          agent?: string;
+          content?: string;
+          timestamp?: string;
+        };
+
+        if (msg.type === 'complete') {
+          // Step 4: Fetch the full care plan result
+          sse.close();
+          sseRef.current = null;
+
+          try {
+            const resultResponse = await axios.get<CarePlan>(
+              apiUrl(`/api/orchestrate/${capturedCaseId}/result`),
+            );
+            setCarePlan(resultResponse.data);
+          } catch (fetchErr) {
+            setError(extractErrorMessage(fetchErr));
+          } finally {
+            setLoading(false);
+            setPendingCaseId(null);
+          }
+        } else if (msg.type === 'error') {
+          sse.close();
+          sseRef.current = null;
+          setError(msg.content ?? 'Orchestration failed. Please try again.');
+          setLoading(false);
+          setPendingCaseId(null);
+        }
+        // Regular agent messages are handled by AgentChat via its own SSE listener.
+      } catch {
+        // Ignore parse errors on keep-alive comments.
+      }
+    };
+
+    sse.onerror = () => {
+      // Only surface an error if we're still loading (not already completed).
+      if (useCaseStore.getState().loading) {
+        sse.close();
+        sseRef.current = null;
+        setError('Lost connection to the server. Please try again.');
+        setLoading(false);
+        setPendingCaseId(null);
+      }
+    };
   };
 
   return { orchestrate, loading, error };

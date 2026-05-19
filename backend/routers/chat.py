@@ -1,5 +1,7 @@
 """
-Router for GET /api/chat/{case_id} — streams agent messages via Server-Sent Events.
+Router for:
+  GET /api/chat/{case_id}         — streams agent messages via Server-Sent Events.
+  GET /api/chat/{case_id}/result  — returns the stored care plan once ready.
 
 Agent messages are published to an in-memory store keyed by case_id during
 orchestration. This endpoint replays any already-received messages immediately
@@ -16,8 +18,8 @@ import logging
 from datetime import datetime, timezone
 from typing import AsyncIterator, Dict, List, Optional
 
-from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,23 @@ _queues: Dict[str, List[asyncio.Queue]] = {}
 
 # Max messages to keep per case (prevents unbounded memory growth).
 _MAX_HISTORY = 200
+
+# ---------------------------------------------------------------------------
+# Care plan result store — keyed by case_id
+# ---------------------------------------------------------------------------
+
+# Stores the final care plan dict once orchestration completes.
+_results: Dict[str, dict] = {}
+
+
+def store_result(case_id: str, care_plan_dict: dict) -> None:
+    """Store the completed care plan for later retrieval by the frontend."""
+    _results[case_id] = care_plan_dict
+
+
+def get_result(case_id: str) -> dict | None:
+    """Return the stored care plan dict for *case_id*, or None if not ready."""
+    return _results.get(case_id)
 
 
 def _utc_now() -> str:
@@ -181,3 +200,22 @@ async def chat_stream(case_id: str) -> StreamingResponse:
             "Connection": "keep-alive",
         },
     )
+
+
+@router.get("/chat/{case_id}/result")
+async def chat_result(case_id: str) -> JSONResponse:
+    """Return the stored care plan for *case_id* once orchestration is complete.
+
+    The frontend polls this after receiving the ``type: complete`` SSE event.
+
+    Returns:
+        200 with the care plan JSON when ready.
+        404 when the result is not yet available.
+    """
+    result = get_result(case_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result for case '{case_id}' is not yet available.",
+        )
+    return JSONResponse(content=result)
