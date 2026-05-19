@@ -1,23 +1,23 @@
 # CareFlow Orchestrator
 
-A multi-agent clinical decision support platform that transforms clinician-provided inputs — typed notes, uploaded images, and spoken audio — into unified, cross-specialty care plans powered by Gemini and CrewAI.
+A multi-agent clinical decision support platform that transforms clinician-provided inputs — typed notes, uploaded images, and spoken audio — into unified, cross-specialty care plans powered by Gemini AI.
 
 Built for the **AI Agent Olympics at Milan AI Week 2026**.
 
-**Live demo:** Frontend on [Vercel](https://vercel.com) · Backend on [Render](https://render.com)
+**🚀 Live demo:** [careflow-agents.vercel.app](https://careflow-agents.vercel.app)
 
 ---
 
 ## Project Overview
 
-CareFlow Orchestrator accepts a patient case as free-text, an image (e.g. chest X-ray, ECG), or dictated audio. A Gemini **Orchestrator Agent** (model configurable via `GEMINI_MODEL`, defaults to `gemini-2.0-flash`) decomposes the case and identifies which medical specialties are relevant. It then dispatches up to four parallel **Specialty Agents** (Radiology, Oncology, Cardiology, Pharmacy). A **Coordinator Agent** reconciles their findings into a structured **Care Plan** containing:
+CareFlow Orchestrator accepts a patient case as free-text, an image (e.g. chest X-ray, ECG), or dictated audio. A Gemini **Orchestrator Agent** (model configurable via `GEMINI_MODEL`, defaults to `gemini-3.1-flash-lite`) decomposes the case and identifies which medical specialties are relevant. It then dispatches up to four parallel **Specialty Agents** (Radiology, Oncology, Cardiology, Pharmacy). A **Coordinator Agent** reconciles their findings into a structured **Care Plan** containing:
 
 - A chronological **timeline** of recommended actions
 - A **recommendations** list
 - An **alerts** list (drug interactions, critical findings, agent failures)
 - **Findings** grouped by specialty
 
-The React frontend presents the care plan in a three-panel dashboard and supports PDF and EMR text export.
+The React frontend presents the care plan in a three-panel dashboard with real-time agent streaming, and supports PDF and EMR text export.
 
 ---
 
@@ -28,7 +28,7 @@ graph TD
     A[Clinician Input<br/>text / image / audio] --> B[UploadWidget<br/>React Frontend]
     B --> C[POST /api/orchestrate<br/>FastAPI Backend]
     C --> D[Orchestrator Agent<br/>Gemini API]
-    D --> E[CrewAI Parallel Dispatch]
+    D --> E[Parallel Dispatch<br/>ThreadPoolExecutor]
     E --> F[Radiology Agent]
     E --> G[Oncology Agent]
     E --> H[Cardiology Agent]
@@ -45,7 +45,7 @@ graph TD
     M --> P[AgentChat SSE]
     M --> Q[ExportBar]
 
-    R[Speechmatics WebSocket] --> B
+    R[Web Speech API / Speechmatics] --> B
     Q --> S[PDF Export — reportlab]
     Q --> T[EMR Text Export]
 ```
@@ -69,14 +69,14 @@ careflow/
 │   │   ├── pharmacy.py
 │   │   └── coordinator.py       # Reconciles findings into Care Plan
 │   ├── routers/
-│   │   ├── orchestrate.py       # POST /api/orchestrate, GET /api/export/*
+│   │   ├── orchestrate.py       # POST /api/orchestrate (202), GET /api/orchestrate/{id}/result
 │   │   ├── cases.py             # GET /api/cases, GET /api/cases/samples
 │   │   ├── chat.py              # GET /api/chat/{case_id} (SSE)
 │   │   └── speech.py            # WS /api/speech/transcribe
 │   ├── services/
 │   │   ├── gemini.py            # Gemini API client (multimodal, model configurable)
 │   │   ├── speechmatics.py      # Speechmatics WebSocket client
-│   │   ├── crew.py              # CrewAI orchestration flow
+│   │   ├── crew.py              # Multi-agent orchestration flow
 │   │   ├── export.py            # PDF + EMR text export
 │   │   └── data_loader.py       # Loads guidelines.json / sample_cases.json
 │   └── data/
@@ -89,7 +89,7 @@ careflow/
 │   │   │   ├── UploadWidget.tsx # Text / image / mic input
 │   │   │   ├── TimelineView.tsx # Vertical care timeline
 │   │   │   ├── CarePlanPanel.tsx# Findings / recommendations / alerts
-│   │   │   ├── AgentChat.tsx    # Real-time agent message stream
+│   │   │   ├── AgentChat.tsx    # Real-time agent message stream (SSE)
 │   │   │   ├── SampleCases.tsx  # Demo case selector
 │   │   │   └── ExportBar.tsx    # PDF / EMR export buttons
 │   │   ├── hooks/
@@ -112,7 +112,7 @@ careflow/
 | Docker | 24+ | Includes Docker Compose v2 |
 | Docker Compose | 2.x | `docker compose` (no hyphen) |
 | Gemini API key | — | [Get one at ai.google.dev](https://ai.google.dev) |
-| Speechmatics API key | — | [Get one at speechmatics.com](https://www.speechmatics.com) — required only for voice input |
+| Speechmatics API key | — | [speechmatics.com](https://www.speechmatics.com) — optional, falls back to Web Speech API |
 
 > **No local Python or Node.js installation is required** when running via Docker Compose.
 
@@ -144,7 +144,7 @@ SPEECHMATICS_API_KEY=your_speechmatics_api_key_here
 DATABASE_URL=sqlite:///./careflow.db
 ```
 
-> `SPEECHMATICS_API_KEY` can be left blank if you do not need voice input — all other features will work without it.
+> `SPEECHMATICS_API_KEY` can be left blank — the app falls back to the browser's built-in Web Speech API automatically.
 
 ---
 
@@ -195,7 +195,7 @@ All endpoints are prefixed with `/api`. The interactive Swagger UI is available 
 
 ### `POST /api/orchestrate`
 
-Run the multi-agent orchestration pipeline for a clinical case.
+Start the multi-agent orchestration pipeline. Returns **202 Accepted** immediately with a `case_id` — orchestration runs in the background.
 
 **Request body** (`application/json`):
 
@@ -203,141 +203,85 @@ Run the multi-agent orchestration pipeline for a clinical case.
 {
   "text": "65-year-old male with chest pain...",
   "image_b64": "<base64-encoded image, optional>",
-  "case_id": "<client-generated UUID, optional>"
+  "case_id": "<UUID, optional — generated server-side if omitted>"
 }
 ```
 
-At least one of `text` or `image_b64` must be present (returns `422` otherwise).
-
-**Response** (`200 OK`):
+**Response** (`202 Accepted`):
 
 ```json
-{
-  "case_id": "550e8400-e29b-41d4-a716-446655440000",
-  "timeline": [
-    { "timestamp": "2024-01-01T10:00:00Z", "specialty": "cardiology", "description": "..." }
-  ],
-  "recommendations": ["..."],
-  "alerts": ["..."],
-  "findings": {
-    "cardiology": { "specialty": "cardiology", "summary": "...", "action_items": ["..."] }
-  }
-}
+{ "case_id": "550e8400-...", "status": "processing" }
 ```
 
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| `422` | No input provided |
-| `502` | Gemini API error |
-| `500` | Orchestration or persistence error |
+Connect to `GET /api/chat/{case_id}` to stream agent messages, then fetch `GET /api/orchestrate/{case_id}/result` when the SSE `type: complete` event fires.
 
 ---
 
-### `GET /api/cases`
+### `GET /api/orchestrate/{case_id}/result`
 
-Returns all previously submitted cases (newest first), each with its deserialized Care Plan.
+Returns the completed care plan once orchestration finishes. Returns `404` while still processing.
 
 ---
 
 ### `GET /api/cases/samples`
 
-Returns the three pre-loaded sample cases from `backend/data/sample_cases.json`.
+Returns the three pre-loaded sample cases.
 
 ---
 
 ### `GET /api/chat/{case_id}`
 
-Streams real-time agent messages for a case as **Server-Sent Events**. Connect with `EventSource` in the browser. Each event carries a JSON-encoded `AgentMessage`:
+Streams real-time agent messages as **Server-Sent Events**. Each event carries:
 
 ```json
-{ "agent": "radiology", "content": "Analyzing imaging findings...", "timestamp": "..." }
+{ "agent": "radiology", "content": "...", "timestamp": "..." }
 ```
 
-A final event with `"type": "complete"` is sent when orchestration finishes.
+A final event with `"type": "complete"` signals orchestration is done.
 
 ---
 
-### `WS /api/speech/transcribe`
+### `GET /api/export/pdf/{case_id}` · `GET /api/export/emr/{case_id}`
 
-WebSocket endpoint for real-time audio transcription via Speechmatics. Send raw PCM audio bytes; receive partial transcript strings. Send the text `"stop"` to end the session.
-
----
-
-### `GET /api/export/pdf/{case_id}`
-
-Download the Care Plan for a stored case as a formatted PDF file.
-
----
-
-### `GET /api/export/emr/{case_id}`
-
-Download the Care Plan for a stored case as a structured plain-text EMR file.
+Download the care plan as PDF or structured plain-text EMR file.
 
 ---
 
 ### `GET /health`
 
-Returns `{ "status": "ok" }`. Useful for container health checks.
+Returns `{ "status": "ok" }`.
 
 ---
 
 ## Development
 
-Running the services locally without Docker requires Python 3.11+ and Node.js 20+.
-
 ### Backend
 
 ```bash
 cd backend
-
-# Create and activate a virtual environment
 python -m venv .venv
-source .venv/bin/activate      # macOS / Linux
-.venv\Scripts\activate         # Windows
-
-# Install dependencies
+.venv\Scripts\activate   # Windows
 pip install -r requirements.txt
-
-# Copy and configure environment variables
 cp .env.example .env
-# Edit .env and add your API keys
-
-# Start the development server
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
-
-The API will be available at `http://localhost:8000` and auto-reloads on file changes.
 
 ### Frontend
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start the Vite dev server
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:5173`. The Vite proxy forwards `/api/*` requests to `http://localhost:8000`, so the backend must be running.
-
 ### Running Tests
 
-**Backend (pytest + Hypothesis):**
-
 ```bash
-cd backend
-pytest
-```
+# Backend
+cd backend && pytest
 
-**Frontend (Vitest + fast-check):**
-
-```bash
-cd frontend
-npm test
+# Frontend
+cd frontend && npm test
 ```
 
 ---
@@ -351,11 +295,11 @@ npm test
 3. Set **Root Directory** to `backend`
 4. Set **Build Command**: `pip install -r requirements.txt`
 5. Set **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-6. Add environment variables in the Render dashboard:
+6. Add environment variables:
    - `GEMINI_API_KEY`
-   - `GEMINI_MODEL` — optional, defaults to `gemini-2.0-flash`
-   - `SPEECHMATICS_API_KEY`
-   - `DATABASE_URL` (use a persistent disk path, e.g. `/data/careflow.db`)
+   - `GEMINI_MODEL` — optional, defaults to `gemini-3.1-flash-lite`
+   - `SPEECHMATICS_API_KEY` — optional
+   - `DATABASE_URL` — e.g. `sqlite:///./careflow.db`
 
 ### Frontend → Vercel
 
@@ -364,7 +308,6 @@ npm test
 3. Set **Build Command**: `npm run build`
 4. Set **Output Directory**: `dist`
 5. Add environment variable:
-   - `VITE_API_URL` — set to your Render backend URL (e.g. `https://careflow-api.onrender.com`)
-6. Update `frontend/vite.config.ts` proxy or use `VITE_API_URL` in axios base URL for production
+   - `VITE_API_URL` — your Render backend URL
 
 > **Contact:** duykhang.sunext@gmail.com
