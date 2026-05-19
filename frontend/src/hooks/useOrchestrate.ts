@@ -127,6 +127,9 @@ export function useOrchestrate(): UseOrchestrateResult {
     const case_id = crypto.randomUUID();
     setPendingCaseId(case_id);
 
+    // Give SSE connection 200ms head start before firing the POST
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
     // Convert image File to base64 once (before retry loop)
     let image_b64: string | undefined = input.image_b64;
     if (!image_b64 && caseImage) {

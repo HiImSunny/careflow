@@ -149,7 +149,7 @@ export function AgentChat({ messages: messagesProp, caseId: caseIdProp }: AgentC
     }
   }, [messages]);
 
-  // Open SSE connection when caseId becomes available.
+  // Open SSE connection as soon as we have a caseId (pendingCaseId set before POST)
   useEffect(() => {
     if (!caseId) {
       return;
@@ -158,51 +158,58 @@ export function AgentChat({ messages: messagesProp, caseId: caseIdProp }: AgentC
     // Close any existing connection.
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
 
     setIsStreaming(true);
     setIsComplete(false);
 
-    const es = new EventSource(apiUrl(`/api/chat/${caseId}`));
-    eventSourceRef.current = es;
+    // Small delay to ensure the SSE connection is established before
+    // the POST request reaches the backend
+    const connectTimer = setTimeout(() => {
+      const es = new EventSource(apiUrl(`/api/chat/${caseId}`));
+      eventSourceRef.current = es;
 
-    es.onmessage = (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data as string) as AgentMessage & { type?: string };
+      es.onmessage = (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data as string) as AgentMessage & { type?: string };
 
-        if (data.type === 'complete') {
-          // Final completion event — display "Care plan ready" message.
+          if (data.type === 'complete') {
+            addAgentMessage({
+              agent: data.agent,
+              content: data.content,
+              timestamp: data.timestamp,
+            });
+            setIsComplete(true);
+            setIsStreaming(false);
+            es.close();
+            eventSourceRef.current = null;
+            return;
+          }
+
           addAgentMessage({
             agent: data.agent,
             content: data.content,
             timestamp: data.timestamp,
           });
-          setIsComplete(true);
-          setIsStreaming(false);
-          es.close();
-          eventSourceRef.current = null;
-          return;
+        } catch (err) {
+          // Ignore malformed events.
         }
+      };
 
-        addAgentMessage({
-          agent: data.agent,
-          content: data.content,
-          timestamp: data.timestamp,
-        });
-      } catch (err) {
-        // Ignore malformed events.
-      }
-    };
-
-    es.onerror = () => {
-      setIsStreaming(false);
-      es.close();
-      eventSourceRef.current = null;
-    };
+      es.onerror = () => {
+        setIsStreaming(false);
+        es.close();
+        eventSourceRef.current = null;
+      };
+    }, 100); // 100ms head start before POST fires
 
     return () => {
-      es.close();
-      eventSourceRef.current = null;
+      clearTimeout(connectTimer);
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     };
   }, [caseId, addAgentMessage]);
 
