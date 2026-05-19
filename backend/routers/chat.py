@@ -112,13 +112,16 @@ def publish_agent_message(case_id: str, message: Optional[dict]) -> None:
 async def _event_generator(case_id: str) -> AsyncIterator[str]:
     """Yield SSE-formatted strings for the given case_id.
 
-    1. Immediately replays all historical messages for this case.
+    1. Immediately replays all historical messages with a small delay between
+       each to simulate real-time streaming for late-connecting clients.
     2. If orchestration is already complete, sends the completion event and exits.
     3. Otherwise subscribes to live updates and streams until completion.
     """
-    # 1. Replay history
-    for msg in list(_message_history.get(case_id, [])):
+    # 1. Replay history with staggered delay so UI shows messages one by one
+    history = list(_message_history.get(case_id, []))
+    for msg in history:
         yield f"data: {json.dumps(msg)}\n\n"
+        await asyncio.sleep(0.15)  # 150ms between replayed messages
 
     # 2. Already done — send completion and exit
     if _completed.get(case_id):
@@ -142,7 +145,6 @@ async def _event_generator(case_id: str) -> AsyncIterator[str]:
                 continue
 
             if message is None:
-                # Orchestration complete
                 completion = {
                     "agent": "system",
                     "content": "Care plan ready",
