@@ -114,12 +114,18 @@ function extractErrorMessage(err: unknown): string {
  * Automatically retries once on network errors before surfacing to the user.
  */
 export function useOrchestrate(): UseOrchestrateResult {
-  const { loading, error, caseImage, setCarePlan, setLoading, setError } =
+  const { loading, error, caseImage, setCarePlan, setLoading, setError, setPendingCaseId } =
     useCaseStore();
+  const clearMessages = () => useCaseStore.setState({ agentMessages: [], carePlan: null });
 
   const orchestrate = async (input: OrchestrateInput): Promise<void> => {
     setLoading(true);
     setError(null);
+    clearMessages();
+
+    // Generate case_id upfront so AgentChat can connect SSE before POST completes
+    const case_id = crypto.randomUUID();
+    setPendingCaseId(case_id);
 
     // Convert image File to base64 once (before retry loop)
     let image_b64: string | undefined = input.image_b64;
@@ -129,11 +135,12 @@ export function useOrchestrate(): UseOrchestrateResult {
       } catch {
         setError('Failed to process the uploaded image. Please try again.');
         setLoading(false);
+        setPendingCaseId(null);
         return;
       }
     }
 
-    const payload: OrchestrateInput = { ...input, image_b64 };
+    const payload: OrchestrateInput = { ...input, image_b64, case_id };
 
     let lastError: unknown = null;
 
@@ -142,25 +149,21 @@ export function useOrchestrate(): UseOrchestrateResult {
         const response = await axios.post<CarePlan>(apiUrl('/api/orchestrate'), payload);
         setCarePlan(response.data);
         setLoading(false);
+        setPendingCaseId(null);
         return;
       } catch (err: unknown) {
         lastError = err;
-
-        // Only retry on network errors (no response received); for HTTP errors
-        // (4xx/5xx) surface immediately — retrying won't help.
         if (attempt < MAX_RETRIES && isNetworkError(err)) {
-          // Brief pause before retry to avoid hammering the server
           await new Promise((resolve) => setTimeout(resolve, 500));
           continue;
         }
-
-        // Either not a network error, or we've exhausted retries
         break;
       }
     }
 
     setError(extractErrorMessage(lastError));
     setLoading(false);
+    setPendingCaseId(null);
   };
 
   return { orchestrate, loading, error };

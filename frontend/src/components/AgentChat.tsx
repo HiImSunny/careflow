@@ -124,7 +124,10 @@ export interface AgentChatProps {
 }
 
 export function AgentChat({ messages: messagesProp, caseId: caseIdProp }: AgentChatProps = {}): React.ReactElement {
-  const storeCaseId = useCaseStore((state) => state.carePlan?.case_id ?? null);
+  const storeCaseId = useCaseStore((state) =>
+    // Connect as soon as pendingCaseId is set (before orchestration completes)
+    state.pendingCaseId ?? state.carePlan?.case_id ?? null
+  );
   const addAgentMessage = useCaseStore((state) => state.addAgentMessage);
   const storeMessages = useCaseStore((state) => state.agentMessages);
 

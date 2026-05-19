@@ -15,6 +15,7 @@ export interface CaseStore {
   agentMessages: AgentMessage[];
   loading: boolean;
   error: string | null;
+  pendingCaseId: string | null;  // set before POST so SSE can connect early
 
   // Actions
   setCaseText: (text: string) => void;
@@ -23,6 +24,7 @@ export interface CaseStore {
   addAgentMessage: (msg: AgentMessage) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+  setPendingCaseId: (id: string | null) => void;
   reset: () => void;
 }
 
@@ -33,23 +35,19 @@ const initialState = {
   agentMessages: [],
   loading: false,
   error: null,
+  pendingCaseId: null,
 };
 
 export const useCaseStore = create<CaseStore>((set) => ({
   ...initialState,
 
   setCaseText: (text) => set({ caseText: text }),
-
   setCaseImage: (file) => set({ caseImage: file }),
-
   setCarePlan: (plan) => set({ carePlan: plan }),
-
   addAgentMessage: (msg) =>
     set((state) => ({ agentMessages: [...state.agentMessages, msg] })),
-
   setLoading: (loading) => set({ loading }),
-
   setError: (error) => set({ error }),
-
+  setPendingCaseId: (id) => set({ pendingCaseId: id }),
   reset: () => set(initialState),
 }));
